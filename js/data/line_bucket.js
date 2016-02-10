@@ -27,6 +27,11 @@ var EXTRUDE_SCALE = 63;
 var COS_HALF_SHARP_CORNER = Math.cos(75 / 2 * (Math.PI / 180));
 var SHARP_CORNER_OFFSET = 15;
 
+// The maximum distance along a line that can be stored in the buffers.
+var MAX_LINE_DISTANCE = Math.pow(2, 14);
+var LINE_DISTANCE_SCALE = 1 / 2;
+
+
 module.exports = LineBucket;
 
 function LineBucket() {
@@ -63,7 +68,7 @@ LineBucket.prototype.shaders = {
                 // The z component's first bit, as well as the sign bit is reserved for the direction,
                 // so we need to shift the linesofar.
                 '((dir < 0) ? -1 : 1) * ((dir ? 1 : 0) | ((linesofar << 1) & 0x7F))',
-                '(linesofar >> 6) & 0x7F'
+                '((linesofar >> 6) & 0xFF) - 128'
             ]
         }]
     }
@@ -111,10 +116,11 @@ LineBucket.prototype.addLine = function(vertices, join, cap, miterLimit, roundLi
         return;
     }
 
+    this.distance = 0;
+
     var beginCap = cap,
         endCap = closed ? 'butt' : cap,
         flip = 1,
-        distance = 0,
         startOfLine = true,
         currentVertex, prevVertex, nextVertex, prevNormal, nextNormal, offsetA, offsetB;
 
@@ -175,8 +181,8 @@ LineBucket.prototype.addLine = function(vertices, join, cap, miterLimit, roundLi
             var prevSegmentLength = currentVertex.dist(prevVertex);
             if (prevSegmentLength > 2 * sharpCornerOffset) {
                 var newPrevVertex = currentVertex.sub(currentVertex.sub(prevVertex)._mult(sharpCornerOffset / prevSegmentLength)._round());
-                distance += newPrevVertex.dist(prevVertex);
-                this.addCurrentVertex(newPrevVertex, flip, distance, prevNormal.mult(1), 0, 0, false);
+                this.distance += newPrevVertex.dist(prevVertex) * LINE_DISTANCE_SCALE;
+                this.addCurrentVertex(newPrevVertex, flip, this.distance, prevNormal.mult(1), 0, 0, false);
                 prevVertex = newPrevVertex;
             }
         }
@@ -208,12 +214,12 @@ LineBucket.prototype.addLine = function(vertices, join, cap, miterLimit, roundLi
         }
 
         // Calculate how far along the line the currentVertex is
-        if (prevVertex) distance += currentVertex.dist(prevVertex);
+        if (prevVertex) this.distance += currentVertex.dist(prevVertex) * LINE_DISTANCE_SCALE;
 
         if (currentJoin === 'miter') {
 
             joinNormal._mult(miterLength);
-            this.addCurrentVertex(currentVertex, flip, distance, joinNormal, 0, 0, false);
+            this.addCurrentVertex(currentVertex, flip, this.distance, joinNormal, 0, 0, false);
 
         } else if (currentJoin === 'flipbevel') {
             // miter is too big, flip the direction to make a beveled join
@@ -227,8 +233,8 @@ LineBucket.prototype.addLine = function(vertices, join, cap, miterLimit, roundLi
                 var bevelLength = miterLength * prevNormal.add(nextNormal).mag() / prevNormal.sub(nextNormal).mag();
                 joinNormal._perp()._mult(bevelLength * direction);
             }
-            this.addCurrentVertex(currentVertex, flip, distance, joinNormal, 0, 0, false);
-            this.addCurrentVertex(currentVertex, -flip, distance, joinNormal, 0, 0, false);
+            this.addCurrentVertex(currentVertex, flip, this.distance, joinNormal, 0, 0, false);
+            this.addCurrentVertex(currentVertex, -flip, this.distance, joinNormal, 0, 0, false);
 
         } else if (currentJoin === 'bevel' || currentJoin === 'fakeround') {
             var lineTurnsLeft = flip * (prevNormal.x * nextNormal.y - prevNormal.y * nextNormal.x) > 0;
@@ -243,7 +249,7 @@ LineBucket.prototype.addLine = function(vertices, join, cap, miterLimit, roundLi
 
             // Close previous segment with a bevel
             if (!startOfLine) {
-                this.addCurrentVertex(currentVertex, flip, distance, prevNormal, offsetA, offsetB, false);
+                this.addCurrentVertex(currentVertex, flip, this.distance, prevNormal, offsetA, offsetB, false);
             }
 
             if (currentJoin === 'fakeround') {
@@ -259,38 +265,38 @@ LineBucket.prototype.addLine = function(vertices, join, cap, miterLimit, roundLi
 
                 for (var m = 0; m < n; m++) {
                     approxFractionalJoinNormal = nextNormal.mult((m + 1) / (n + 1))._add(prevNormal)._unit();
-                    this.addPieSliceVertex(currentVertex, flip, distance, approxFractionalJoinNormal, lineTurnsLeft);
+                    this.addPieSliceVertex(currentVertex, flip, this.distance, approxFractionalJoinNormal, lineTurnsLeft);
                 }
 
-                this.addPieSliceVertex(currentVertex, flip, distance, joinNormal, lineTurnsLeft);
+                this.addPieSliceVertex(currentVertex, flip, this.distance, joinNormal, lineTurnsLeft);
 
                 for (var k = n - 1; k >= 0; k--) {
                     approxFractionalJoinNormal = prevNormal.mult((k + 1) / (n + 1))._add(nextNormal)._unit();
-                    this.addPieSliceVertex(currentVertex, flip, distance, approxFractionalJoinNormal, lineTurnsLeft);
+                    this.addPieSliceVertex(currentVertex, flip, this.distance, approxFractionalJoinNormal, lineTurnsLeft);
                 }
             }
 
             // Start next segment
             if (nextVertex) {
-                this.addCurrentVertex(currentVertex, flip, distance, nextNormal, -offsetA, -offsetB, false);
+                this.addCurrentVertex(currentVertex, flip, this.distance, nextNormal, -offsetA, -offsetB, false);
             }
 
         } else if (currentJoin === 'butt') {
             if (!startOfLine) {
                 // Close previous segment with a butt
-                this.addCurrentVertex(currentVertex, flip, distance, prevNormal, 0, 0, false);
+                this.addCurrentVertex(currentVertex, flip, this.distance, prevNormal, 0, 0, false);
             }
 
             // Start next segment with a butt
             if (nextVertex) {
-                this.addCurrentVertex(currentVertex, flip, distance, nextNormal, 0, 0, false);
+                this.addCurrentVertex(currentVertex, flip, this.distance, nextNormal, 0, 0, false);
             }
 
         } else if (currentJoin === 'square') {
 
             if (!startOfLine) {
                 // Close previous segment with a square cap
-                this.addCurrentVertex(currentVertex, flip, distance, prevNormal, 1, 1, false);
+                this.addCurrentVertex(currentVertex, flip, this.distance, prevNormal, 1, 1, false);
 
                 // The segment is done. Unset vertices to disconnect segments.
                 this.e1 = this.e2 = -1;
@@ -299,17 +305,17 @@ LineBucket.prototype.addLine = function(vertices, join, cap, miterLimit, roundLi
 
             // Start next segment
             if (nextVertex) {
-                this.addCurrentVertex(currentVertex, flip, distance, nextNormal, -1, -1, false);
+                this.addCurrentVertex(currentVertex, flip, this.distance, nextNormal, -1, -1, false);
             }
 
         } else if (currentJoin === 'round') {
 
             if (!startOfLine) {
                 // Close previous segment with butt
-                this.addCurrentVertex(currentVertex, flip, distance, prevNormal, 0, 0, false);
+                this.addCurrentVertex(currentVertex, flip, this.distance, prevNormal, 0, 0, false);
 
                 // Add round cap or linejoin at end of segment
-                this.addCurrentVertex(currentVertex, flip, distance, prevNormal, 1, 1, true);
+                this.addCurrentVertex(currentVertex, flip, this.distance, prevNormal, 1, 1, true);
 
                 // The segment is done. Unset vertices to disconnect segments.
                 this.e1 = this.e2 = -1;
@@ -320,9 +326,9 @@ LineBucket.prototype.addLine = function(vertices, join, cap, miterLimit, roundLi
             // Start next segment with a butt
             if (nextVertex) {
                 // Add round cap before first segment
-                this.addCurrentVertex(currentVertex, flip, distance, nextNormal, -1, -1, true);
+                this.addCurrentVertex(currentVertex, flip, this.distance, nextNormal, -1, -1, true);
 
-                this.addCurrentVertex(currentVertex, flip, distance, nextNormal, 0, 0, false);
+                this.addCurrentVertex(currentVertex, flip, this.distance, nextNormal, 0, 0, false);
             }
         }
 
@@ -330,8 +336,8 @@ LineBucket.prototype.addLine = function(vertices, join, cap, miterLimit, roundLi
             var nextSegmentLength = currentVertex.dist(nextVertex);
             if (nextSegmentLength > 2 * sharpCornerOffset) {
                 var newCurrentVertex = currentVertex.add(nextVertex.sub(currentVertex)._mult(sharpCornerOffset / nextSegmentLength)._round());
-                distance += newCurrentVertex.dist(currentVertex);
-                this.addCurrentVertex(newCurrentVertex, flip, distance, nextNormal.mult(1), 0, 0, false);
+                this.distance += newCurrentVertex.dist(currentVertex) * LINE_DISTANCE_SCALE;
+                this.addCurrentVertex(newCurrentVertex, flip, this.distance, nextNormal.mult(1), 0, 0, false);
                 currentVertex = newCurrentVertex;
             }
         }
@@ -377,6 +383,14 @@ LineBucket.prototype.addCurrentVertex = function(currentVertex, flip, distance, 
     }
     this.e1 = this.e2;
     this.e2 = this.e3;
+
+    // There is a maximum "distance along the line" that we can store in the buffers.
+    // When we get close to the distance, reset it to zero and add the vertex again with
+    // a distance of zero.
+    if (distance > MAX_LINE_DISTANCE / 2) {
+        this.distance = 0;
+        this.addCurrentVertex(currentVertex, flip, this.distance, normal, endLeft, endRight, round);
+    }
 };
 
 /**
