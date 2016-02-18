@@ -355,7 +355,7 @@ LineBucket.prototype.addLine = function(vertices, join, cap, miterLimit, roundLi
 LineBucket.prototype.addCurrentVertex = function(currentVertex, flip, distance, normal, endLeft, endRight, round) {
     var tx = round ? 1 : 0;
     var extrude;
-    var group = this.elementGroups.line.current;
+    var group = this.elementGroups.line[this.elementGroups.line.length - 1];
     group.vertexLength += 2;
 
     extrude = normal.mult(flip);
@@ -393,7 +393,7 @@ LineBucket.prototype.addCurrentVertex = function(currentVertex, flip, distance, 
 LineBucket.prototype.addPieSliceVertex = function(currentVertex, flip, distance, extrude, lineTurnsLeft) {
     var ty = lineTurnsLeft ? 1 : 0;
     extrude = extrude.mult(flip * (lineTurnsLeft ? -1 : 1));
-    var group = this.elementGroups.line.current;
+    var group = this.elementGroups.line[this.elementGroups.line.length - 1];
 
     this.e3 = this.addLineVertex(currentVertex, extrude, 0, ty, 0, distance) - group.vertexStartIndex;
     group.vertexLength++;
