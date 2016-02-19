@@ -428,5 +428,5 @@ TilePyramid.prototype = {
 };
 
 function compareKeyZoom(a, b) {
-    return (b % 32) - (a % 32);
+    return (a % 32) - (b % 32);
 }
